@@ -16,10 +16,13 @@ import {
   readRecords,
   RecordType,
 } from "react-native-health-connect";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import "react-native-get-random-values";
+import { v4 as uuidv4 } from "uuid";
 
 const SERVER_URL = "https://healthsyncconnect.onrender.com/api/healthdata";
+const USER_ID_STORAGE_KEY = "@MyApp:userId";
 
-// 🔧 Setup notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -33,9 +36,34 @@ Notifications.setNotificationHandler({
 export default function App() {
   const [time, setTime] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
-  const [isSending, setIsSending] = useState(false); // State to prevent multiple sends
+  const [isSending, setIsSending] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isLoadingUserId, setIsLoadingUserId] = useState(true);
 
-  // 🔔 Request notification permissions
+  useEffect(() => {
+    const loadOrCreateUserId = async () => {
+      try {
+        let userId = await AsyncStorage.getItem(USER_ID_STORAGE_KEY);
+
+        if (userId === null) {
+          userId = uuidv4();
+          await AsyncStorage.setItem(USER_ID_STORAGE_KEY, userId);
+          console.log("Generated new userId:", userId);
+        } else {
+          console.log("Loaded existing userId:", userId);
+        }
+        setCurrentUserId(userId);
+      } catch (error) {
+        console.error("Error loading or saving userId:", error);
+        Alert.alert("Error", "Could not load or create a user ID.");
+      } finally {
+        setIsLoadingUserId(false);
+      }
+    };
+
+    loadOrCreateUserId();
+  }, []);
+
   useEffect(() => {
     const requestPermissions = async () => {
       const { status } = await Notifications.requestPermissionsAsync();
@@ -47,9 +75,19 @@ export default function App() {
   }, []);
 
   const sendHealthData = async () => {
+    if (isLoadingUserId) {
+      Alert.alert("Please Wait", "Loading user ID...");
+      return;
+    }
+
+    if (!currentUserId) {
+      Alert.alert("Error", "User ID not available. Please restart the app.");
+      return;
+    }
+
     if (isSending) {
       console.log("Already sending data, please wait.");
-      return; // Prevent multiple taps
+      return;
     }
 
     Alert.alert(
@@ -59,11 +97,9 @@ export default function App() {
     );
     try {
       if (Platform.OS === "ios") {
-        // Call your iOS health data + MongoDB sending function
-        await fetchAndSendAppleHealthData();
+        await fetchAndSendAppleHealthData(currentUserId);
       } else if (Platform.OS === "android") {
-        // Call your Android health connect + MongoDB sending function
-        await fetchAndSendAndroidHealthData();
+        await fetchAndSendAndroidHealthData(currentUserId);
       } else {
         Alert.alert("Unsupported platform");
       }
@@ -73,7 +109,7 @@ export default function App() {
     }
   };
 
-  const fetchAndSendAppleHealthData = async () => {
+  const fetchAndSendAppleHealthData = async (currentUserId: string) => {
     const permissions: HealthKitPermissions = {
       permissions: {
         read: [
@@ -141,7 +177,7 @@ export default function App() {
 
         const healthData: any = {};
         const startDateDate = new Date();
-        startDateDate.setDate(startDateDate.getDate() - 1); // yesterday
+        startDateDate.setDate(startDateDate.getDate() - 1);
         startDateDate.setHours(0, 0, 0, 0);
         const endDateDate = new Date();
         endDateDate.setDate(endDateDate.getDate() - 1);
@@ -154,7 +190,7 @@ export default function App() {
             fn(options, (error: string, results: any) => {
               const key = fn.name || "unknown";
               if (error || !results) {
-                console.log(`❌ Error fetching ${key}:`, error);
+                console.log(`Error fetching ${key}:`, error);
                 resolve({ key, value: [] });
               } else {
                 resolve({ key, value: results });
@@ -299,19 +335,18 @@ export default function App() {
           healthData[key] = value;
         });
 
-        console.log("✅ iOS Health Data:", healthData);
-        await sendToMongoDB(healthData, "iOS");
+        console.log("iOS Health Data:", healthData);
+        await sendToMongoDB(healthData, "iOS", currentUserId);
 
         resolve();
       });
     });
   };
 
-  const fetchAndSendAndroidHealthData = async () => {
+  const fetchAndSendAndroidHealthData = async (currentUserId: string) => {
     console.log("Android Data");
     const isInitialized = await initialize();
     console.log("Initialized");
-    // request permissions
 
     const grantedPermissions = await requestPermission([
       { accessType: "read", recordType: "ActiveCaloriesBurned" },
@@ -436,8 +471,8 @@ export default function App() {
         console.warn(`Error reading ${recordType}:`, error);
       }
     }
-    console.log("All Records:", allRecords);
-    await sendToMongoDB(allRecords, "Android");
+    //console.log("All Records:", allRecords);
+    await sendToMongoDB(allRecords, "Android", currentUserId);
   };
 
   const scheduleDailyNotification = async (hour: number, minute: number) => {
@@ -448,7 +483,6 @@ export default function App() {
     trigger.setMinutes(minute);
     trigger.setSeconds(0);
 
-    // If scheduled time has already passed today, schedule for tomorrow
     if (trigger < new Date()) {
       trigger.setDate(trigger.getDate() + 1);
     }
@@ -460,8 +494,8 @@ export default function App() {
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
-        hour: hour, // passed in from picker
-        minute: minute, // passed in from picker
+        hour: hour,
+        minute: minute,
         second: 0,
         repeats: true,
       },
@@ -486,16 +520,17 @@ export default function App() {
 
   const sendToMongoDB = async (
     healthData: any,
-    platform: "iOS" | "Android"
+    platform: "iOS" | "Android",
+    userId: string
   ) => {
-    setIsSending(true); // Set sending state
+    setIsSending(true);
     console.log(`Attempting to send ${platform} data to MongoDB...`);
 
     try {
       const dataToSend = {
-        platform: platform, // 'ios' or 'android'
-        // timestamp: new Date(), // Optional: server sets default, but sending client time can be useful
-        data: healthData, // The collected health data object
+        platform: platform,
+        data: healthData,
+        userId: userId,
       };
 
       console.log("Data structure being sent:", dataToSend);
@@ -504,24 +539,21 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // Add any necessary auth headers later if you implement authentication
         },
-        body: JSON.stringify(dataToSend), // Convert the JavaScript object to a JSON string
+        body: JSON.stringify(dataToSend),
       });
 
-      const responseData = await response.json(); // Always attempt to parse the JSON response
+      const responseData = await response.json();
 
       if (response.ok) {
-        // Check if the HTTP status code is in the 2xx range
-        console.log("✅ Data sent successfully:", responseData);
+        console.log("Data sent successfully!");
         Alert.alert(
           "Success",
           `${platform.toUpperCase()} health data sent successfully.`
         );
       } else {
-        // Handle server errors (e.g., validation errors from backend)
         console.error(
-          "❌ Server responded with error:",
+          "Server responded with error:",
           response.status,
           responseData
         );
@@ -529,20 +561,19 @@ export default function App() {
           "Error",
           `Failed to send ${platform.toUpperCase()} data: ${
             responseData.message || response.statusText
-          }` // Display server message if available
+          }`
         );
       }
     } catch (error) {
-      console.error("❌ Network or fetch error:", error);
+      console.error("Network or fetch error:", error);
       Alert.alert(
         "Error",
         `Could not send ${platform.toUpperCase()} data. Check your network connection and server URL.`
       );
     } finally {
-      setIsSending(false); // Reset sending state
+      setIsSending(false);
     }
   };
-  // ⬅️ END OF NEW FUNCTION: sendToMongoDB
 
   return (
     <View style={styles.container}>
@@ -561,7 +592,7 @@ export default function App() {
         <Button
           title="Edit Notification Time"
           onPress={() => setShowPicker(true)}
-          disabled={isSending} // Optionally disable while sending
+          disabled={isSending}
         />
       </View>
 
