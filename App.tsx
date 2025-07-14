@@ -89,7 +89,6 @@ export default function App() {
       console.log("Already sending data, please wait.");
       return;
     }
-
     Alert.alert(
       "Sending Data",
       "Fetching and sending health data. This might take a moment...",
@@ -110,6 +109,7 @@ export default function App() {
   };
 
   const fetchAndSendAppleHealthData = async (currentUserId: string) => {
+    //console.log("1");
     const permissions: HealthKitPermissions = {
       permissions: {
         read: [
@@ -167,13 +167,19 @@ export default function App() {
         write: [],
       },
     };
+    //console.log("2");
 
     return new Promise<void>((resolve) => {
+      //console.log("3");
+
       AppleHealthKit.initHealthKit(permissions, async (err: string) => {
+        //console.log("4");
+
         if (err) {
           console.log("HealthKit init error:", err);
           return resolve();
         }
+        //console.log("5");
 
         const healthData: any = {};
         const startDateDate = new Date();
@@ -184,15 +190,23 @@ export default function App() {
         endDateDate.setHours(23, 59, 59, 999);
         const startDate = new Date(startDateDate).toISOString();
         const endDate = new Date(endDateDate).toISOString();
+        const timeZero = new Date(0).toISOString();
 
         const wrap = (fn: Function, options: object) =>
           new Promise<{ key: string; value: any[] }>((resolve) => {
+            const key = fn.name || "unknown";
+            // console.log(`Starting ${key}...`);
+
+            const startTime = Date.now();
+
             fn(options, (error: string, results: any) => {
-              const key = fn.name || "unknown";
+              const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
               if (error || !results) {
-                console.log(`Error fetching ${key}:`, error);
+                console.warn(`${key} failed after ${duration}s:`, error);
                 resolve({ key, value: [] });
               } else {
+                //console.log(`Finished ${key} in ${duration}s`);
                 resolve({ key, value: results });
               }
             });
@@ -214,19 +228,19 @@ export default function App() {
             startDate,
             endDate,
           }),
-          wrap(AppleHealthKit.getLatestPeakFlow, { startDate, endDate }),
+          // (Crashes App) wrap(AppleHealthKit.getLatestPeakFlow, { startDate, endDate }),
           wrap(AppleHealthKit.getPeakFlowSamples, { startDate, endDate }),
-          wrap(AppleHealthKit.getLatestBmi, { startDate, endDate }),
+          // (Broken) wrap(AppleHealthKit.getLatestBmi, { startDate, endDate }),
           wrap(AppleHealthKit.getBmiSamples, { startDate, endDate }),
-          wrap(AppleHealthKit.getLatestBodyFatPercentage, {
-            startDate,
-            endDate,
-          }),
+          // (Broken) wrap(AppleHealthKit.getLatestBodyFatPercentage, {
+          //   startDate,
+          //   endDate,
+          // }),
           wrap(AppleHealthKit.getBodyFatPercentageSamples, {
             startDate,
             endDate,
           }),
-          wrap(AppleHealthKit.getLatestLeanBodyMass, { startDate, endDate }),
+          // (Broken) wrap(AppleHealthKit.getLatestLeanBodyMass, { startDate, endDate }),
           wrap(AppleHealthKit.getLeanBodyMassSamples, { startDate, endDate }),
           wrap(AppleHealthKit.getStepCount, { startDate, endDate }),
           wrap(AppleHealthKit.getSamples, { startDate, endDate }),
@@ -293,12 +307,11 @@ export default function App() {
           wrap(AppleHealthKit.getSleepSamples, { startDate, endDate }),
           wrap(AppleHealthKit.getInfo, { startDate, endDate }),
           wrap(AppleHealthKit.getMindfulSession, { startDate, endDate }),
-          wrap(AppleHealthKit.getWorkoutRouteSamples, { startDate, endDate }),
-          wrap(AppleHealthKit.getAuthStatus, { startDate, endDate }),
-          wrap(AppleHealthKit.getLatestBloodAlcoholContent, {
-            startDate,
-            endDate,
-          }),
+          // wrap(AppleHealthKit.getWorkoutRouteSamples, { startDate, endDate }),
+          // (Broken) wrap(AppleHealthKit.getLatestBloodAlcoholContent, {
+          //   startDate,
+          //   endDate,
+          // }),
           wrap(AppleHealthKit.getBloodAlcoholContentSamples, {
             startDate,
             endDate,
@@ -324,7 +337,6 @@ export default function App() {
             startDate,
             endDate,
           }),
-          wrap(AppleHealthKit.getClinicalRecords, { startDate, endDate }),
           wrap(AppleHealthKit.getActivitySummary, { startDate, endDate }),
           wrap(AppleHealthKit.getInsulinDeliverySamples, {
             startDate,
@@ -335,7 +347,7 @@ export default function App() {
           healthData[key] = value;
         });
 
-        console.log("iOS Health Data:", healthData);
+        // console.log("iOS Health Data:", healthData);
         await sendToMongoDB(healthData, "iOS", currentUserId);
 
         resolve();
